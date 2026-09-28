@@ -1,0 +1,12 @@
+{
+  "name": "Sketch 导入",
+  "description": "把 .sketch 文件导入到 Penpot 当前页面",
+  "host": "https://tx55038964.github.io/penpot-sketch-importer/",
+  "code": "plugin.js",
+  "permissions": [
+    "content:read",
+    "content:write",
+    "library:read",
+    "library:write"
+  ]
+}

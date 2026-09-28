@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Sketch 导入</title>
+<style>
+  :root { --bg:#fff; --fg:#1f1f1f; --muted:#6b6b6b; --line:#e3e3e3; --accent:#6911d4; --warn:#b25e00; --err:#c62828; --card:#f6f6f7; }
+  :root[data-theme="dark"] { --bg:#18181a; --fg:#e8e8ea; --muted:#9a9aa0; --line:#2e2e32; --accent:#9d6bff; --warn:#f0a040; --err:#ff6b6b; --card:#222226; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:13px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  h1 { font-size:14px; margin:0 0 4px; }
+  p.hint { color:var(--muted); margin:0 0 12px; font-size:12px; }
+  .drop { border:1.5px dashed var(--line); border-radius:8px; padding:18px; text-align:center; cursor:pointer; color:var(--muted); }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .drop b { color:var(--fg); }
+  .section { margin-top:14px; }
+  .pages { background:var(--card); border-radius:8px; padding:8px 10px; max-height:150px; overflow:auto; }
+  label.row { display:flex; gap:8px; align-items:center; padding:3px 0; }
+  label.row small { color:var(--muted); margin-left:auto; }
+  button { width:100%; margin-top:14px; padding:9px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:13px; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:default; }
+  .bar { height:6px; background:var(--card); border-radius:3px; overflow:hidden; margin-top:6px; }
+  .bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #status { margin-top:10px; font-size:12px; color:var(--muted); }
+  #log { margin-top:8px; font-size:12px; max-height:170px; overflow:auto; white-space:pre-wrap; }
+  .warn { color:var(--warn); } .err { color:var(--err); } .ok { color:var(--fg); font-weight:600; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+  <h1>导入 Sketch 文件</h1>
+  <p class="hint">选择 .sketch 文件，图层会画到当前页面上（支持 Sketch 43 及以后保存的文件）。</p>
+
+  <div id="drop" class="drop">点击选择或拖入 <b>.sketch</b> 文件</div>
+  <input id="file" type="file" accept=".sketch" class="hidden" />
+
+  <div id="setup" class="hidden">
+    <div class="section">
+      <div>要导入的页面</div>
+      <div id="pages" class="pages"></div>
+    </div>
+    <label class="row section"><input id="comp" type="checkbox" /> 把 Symbol 母版转成 Penpot 组件</label>
+    <button id="go">开始导入</button>
+  </div>
+
+  <div id="progress" class="hidden">
+    <div class="bar"><i id="barFill"></i></div>
+  </div>
+  <div id="status"></div>
+  <div id="log"></div>
+
+<script src="jszip.min.js"></script>
+<script>
+  const theme = new URLSearchParams(location.search).get('theme');
+  if (theme) document.documentElement.dataset.theme = theme;
+
+  const $ = (id) => document.getElementById(id);
+  let parsed = null;
+
+  const setStatus = (t, cls) => { $('status').className = cls || ''; $('status').textContent = t; };
+  const log = (t, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = t; $('log').appendChild(d); };
+
+  $('drop').onclick = () => $('file').click();
+  $('file').onchange = (e) => e.target.files[0] && load(e.target.files[0]);
+  $('drop').ondragover = (e) => { e.preventDefault(); $('drop').classList.add('over'); };
+  $('drop').ondragleave = () => $('drop').classList.remove('over');
+  $('drop').ondrop = (e) => { e.preventDefault(); $('drop').classList.remove('over'); e.dataTransfer.files[0] && load(e.dataTransfer.files[0]); };
+
+  function countLayers(layers) { let n = 0; for (const l of layers || []) n += 1 + countLayers(l.layers); return n; }
+
+  async function load(file) {
+    $('log').textContent = '';
+    $('setup').classList.add('hidden');
+    setStatus('正在解压 ' + file.name + ' …');
+    try {
+      const zip = await JSZip.loadAsync(file);
+      if (!zip.file('document.json')) throw new Error('这不是新版 Sketch 文件（缺少 document.json）。请用 Sketch 43 以上版本重新保存。');
+      const readJSON = async (p) => JSON.parse(await zip.file(p).async('string'));
+      const sketchDoc = await readJSON('document.json');
+      const pages = [];
+      for (const ref of sketchDoc.pages || []) {
+        const p = ref._ref.endsWith('.json') ? ref._ref : ref._ref + '.json';
+        if (zip.file(p)) pages.push(await readJSON(p));
+      }
+      const images = {};
+      const imgFiles = zip.file(/^images\//);
+      for (const f of imgFiles) images[f.name] = await f.async('uint8array');
+      parsed = { sketchDoc, pages, images };
+
+      $('drop').innerHTML = '已载入 <b></b>（点击更换）';
+      $('drop').querySelector('b').textContent = file.name;
+      const box = $('pages');
+      box.textContent = '';
+      pages.forEach((p, i) => {
+        const onlySymbols = (p.layers || []).length > 0 && p.layers.every((l) => l._class === 'symbolMaster');
+        const row = document.createElement('label');
+        row.className = 'row';
+        row.innerHTML = '<input type="checkbox" /><span></span><small></small>';
+        row.querySelector('input').checked = !onlySymbols;
+        row.querySelector('input').dataset.index = i;
+        row.querySelector('span').textContent = p.name;
+        row.querySelector('small').textContent = countLayers(p.layers) + ' 个图层' + (onlySymbols ? ' · Symbol 页' : '');
+        box.appendChild(row);
+      });
+      $('setup').classList.remove('hidden');
+      setStatus(`共 ${pages.length} 个页面、${imgFiles.length} 张图片。`);
+    } catch (e) {
+      setStatus('读取失败：' + (e.message || e), 'err');
+    }
+  }
+
+  $('go').onclick = () => {
+    if (!parsed) return;
+    const chosen = [...$('pages').querySelectorAll('input:checked')].map((i) => +i.dataset.index);
+    if (!chosen.length) { setStatus('请至少选择一个页面', 'err'); return; }
+    const pages = chosen.map((i) => parsed.pages[i]);
+    const symbolPages = parsed.pages.filter((_, i) => !chosen.includes(i));
+    $('go').disabled = true;
+    $('log').textContent = '';
+    $('progress').classList.remove('hidden');
+    setStatus('准备导入…');
+    parent.postMessage({
+      type: 'import',
+      document: parsed.sketchDoc,
+      pages,
+      symbolPages,
+      images: parsed.images,
+      options: { makeComponents: $('comp').checked },
+    }, '*');
+  };
+
+  window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg || !msg.type) return;
+    if (msg.type === 'progress') {
+      setStatus(msg.phase + (msg.total > 1 ? ` ${msg.done}/${msg.total}` : '') + ' …');
+      $('barFill').style.width = (msg.total ? Math.round((msg.done / msg.total) * 100) : 0) + '%';
+    } else if (msg.type === 'done') {
+      $('barFill').style.width = '100%';
+      $('go').disabled = false;
+      setStatus('');
+      log(`导入完成：处理 ${msg.layers} 个图层，生成 ${msg.topLevel} 个顶层对象。`, 'ok');
+      if (msg.missingFonts.length) {
+        log('以下字体在 Penpot 中没找到，已用替代字体。上传这些字体后重新导入即可还原：', 'warn');
+        for (const f of msg.missingFonts) log(`  ${f.ps} → ${f.used}`, 'warn');
+      }
+      if (msg.warnings.length) {
+        log(`提示 ${msg.warnings.length} 条：`, 'warn');
+        for (const w of msg.warnings) log('  ' + w, 'warn');
+      }
+    } else if (msg.type === 'error') {
+      $('go').disabled = false;
+      setStatus('导入出错', 'err');
+      log(msg.message, 'err');
+    }
+  });
+</script>
+</body>
+</html>
