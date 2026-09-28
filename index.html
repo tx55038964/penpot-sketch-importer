@@ -52,7 +52,8 @@
 <script src="jszip.min.js"></script>
 <script>
   const theme = new URLSearchParams(location.search).get('theme');
-  if (theme) document.documentElement.dataset.theme = theme;
+  if (theme) document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+  parent.postMessage({ type: 'ready' }, '*');
 
   const $ = (id) => document.getElementById(id);
   let parsed = null;
@@ -132,6 +133,10 @@
   window.addEventListener('message', (e) => {
     const msg = e.data;
     if (!msg || !msg.type) return;
+    if (msg.type === 'theme') {
+      document.documentElement.dataset.theme = msg.theme === 'light' ? 'light' : 'dark';
+      return;
+    }
     if (msg.type === 'progress') {
       setStatus(msg.phase + (msg.total > 1 ? ` ${msg.done}/${msg.total}` : '') + ' …');
       $('barFill').style.width = (msg.total ? Math.round((msg.done / msg.total) * 100) : 0) + '%';

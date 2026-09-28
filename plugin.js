@@ -3,7 +3,13 @@
 
 penpot.ui.open('Sketch 导入', `?theme=${penpot.theme}`, { width: 380, height: 560 });
 
+penpot.on('themechange', (theme) => penpot.ui.sendMessage({ type: 'theme', theme }));
+
 penpot.ui.onMessage(async (msg) => {
+  if (msg && msg.type === 'ready') {
+    penpot.ui.sendMessage({ type: 'theme', theme: penpot.theme });
+    return;
+  }
   if (!msg || msg.type !== 'import') return;
   try {
     const result = await importSketch(msg);
@@ -298,7 +304,8 @@ function applyTextAttrs(ctx, target, attrs, layerFills) {
     const { font, variant, weight } = ctx.resolveFont(fontAttr.name);
     if (font) {
       try {
-        font.applyToRange(target, variant || undefined);
+        if (target.type === 'text') font.applyToText(target, variant || undefined);
+        else font.applyToRange(target, variant || undefined);
       } catch (e) {
         set(ctx, target, 'fontId', font.fontId);
         set(ctx, target, 'fontFamily', font.fontFamily);
@@ -488,8 +495,12 @@ function buildChildren(ctx, layers, m, overrides, into) {
   for (const child of layers || []) {
     const shape = buildLayer(ctx, child, layerMatrix(child, m), overrides);
     if (!shape) continue;
-    if (into) into.appendChild(shape);
     items.push({ shape, layer: child });
+  }
+  if (into) {
+    // 开启 naturalChildOrdering 后 appendChild 放到最上面；旧版 Penpot 会放到最下面，就倒着加
+    const order = ctx.naturalOrdering ? items : items.slice().reverse();
+    for (const it of order) into.appendChild(it.shape);
   }
 
   const out = [];
@@ -687,12 +698,19 @@ async function importSketch({ document, pages, symbolPages, images, options }) {
     sharedStyles: new Map(),
     missingFonts: new Map(),
     makeComponents: !!(options && options.makeComponents),
+    naturalOrdering: false,
     warn: (m) => { if (warnings.length < 500) warnings.push(m); },
     done: 0,
     total: 0,
     tick: null,
   };
   ctx.resolveFont = makeFontResolver(ctx);
+  try {
+    penpot.flags.naturalChildOrdering = true;
+    ctx.naturalOrdering = penpot.flags.naturalChildOrdering === true;
+  } catch (e) {
+    ctx.naturalOrdering = false;
+  }
 
   // Symbol 定义：本文件所有页面 + 外部库
   const collectSymbols = (layers) => {

@@ -26,7 +26,7 @@ function makeShape(type) {
     borderRadius: 0,
     resize(w, h) { this.width = w; this.height = h; },
     rotate(a) { this.rotation = (this.rotation || 0) + a; },
-    appendChild(c) { detach(c); c.parent = this; this.children.push(c); },
+    appendChild(c) { detach(c); c.parent = this; if (flags.naturalChildOrdering) this.children.push(c); else this.children.unshift(c); },
     makeMask() { this.mask = true; },
     clone() {
       const c = deepClone(this);
@@ -64,12 +64,18 @@ const fontsAll = [
   { name: 'Source Sans Pro', fontFamily: 'sourcesanspro', fontId: 'sourcesanspro', variants: [{ fontVariantId: 'regular', fontWeight: '400', fontStyle: 'normal' }, { fontVariantId: '700', fontWeight: '700', fontStyle: 'normal' }] },
   { name: 'Noto Sans SC', fontFamily: 'Noto Sans SC', fontId: 'gfont-noto-sans-sc', variants: [400, 500, 600, 700].map((w) => ({ fontVariantId: String(w), fontWeight: String(w), fontStyle: 'normal' })) },
 ];
+for (const f of fontsAll) f.applyToText = function (t, v) { count('applyToText'); t.fontFamily = this.fontFamily; };
 for (const f of fontsAll) f.applyToRange = function (r, v) { count('applyToRange'); r.fontFamily = this.fontFamily; r.fontWeight = v ? v.fontWeight : '400'; };
 
 let handler = null;
+// 和真实 Penpot 一样：默认 appendChild 放到最下面；MOCK_FLAGS=off 模拟不支持 flags 的旧版本
+const flags = { naturalChildOrdering: false };
+const flagsApi = process.env.MOCK_FLAGS === 'off' ? undefined : flags;
 const messages = [];
 const penpot = {
   theme: 'light',
+  flags: flagsApi,
+  on() {},
   ui: { open() {}, onMessage(cb) { handler = cb; }, sendMessage(m) { messages.push(m); } },
   createRectangle: () => (count('rect'), makeShape('rectangle')),
   createEllipse: () => (count('ellipse'), makeShape('ellipse')),
