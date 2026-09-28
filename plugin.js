@@ -3,7 +3,9 @@
 
 penpot.ui.open('Sketch 导入', `?theme=${penpot.theme}`, { width: 380, height: 560 });
 
-penpot.on('themechange', (theme) => penpot.ui.sendMessage({ type: 'theme', theme }));
+try {
+  penpot.on('themechange', (theme) => penpot.ui.sendMessage({ type: 'theme', theme }));
+} catch (e) { /* 旧版 Penpot 没有 on() */ }
 
 penpot.ui.onMessage(async (msg) => {
   if (msg && msg.type === 'ready') {
@@ -403,10 +405,10 @@ function buildPath(ctx, d, name) {
 }
 
 // 只生成几何（不带样式），给布尔组合用
-function buildGeometry(ctx, layer, m) {
+async function buildGeometry(ctx, layer, m) {
   const f = layer.frame;
   if (layer._class === 'shapeGroup') {
-    return buildShapeGroup(ctx, layer, m, null);
+    return await buildShapeGroup(ctx, layer, m, null);
   }
   if (isAxisAligned(m) && (layer._class === 'rectangle' || layer._class === 'oval')) {
     const box = boxOf(m, f.width, f.height);
@@ -432,11 +434,11 @@ function buildGeometry(ctx, layer, m) {
 
 const BOOL_OPS = ['union', 'difference', 'intersection', 'exclude'];
 
-function buildShapeGroup(ctx, layer, m, style) {
+async function buildShapeGroup(ctx, layer, m, style) {
   const kids = [];
   for (const child of layer.layers || []) {
     if (child.isVisible === false) continue;
-    const g = buildGeometry(ctx, child, layerMatrix(child, m));
+    const g = await buildGeometry(ctx, child, layerMatrix(child, m));
     if (g) kids.push({ shape: g, op: child.booleanOperation });
   }
   if (!kids.length) return null;
@@ -490,10 +492,10 @@ function buildBitmap(ctx, layer, m, style, over) {
 // ---------------------------------------------------------------------------
 
 // 把一组 Sketch 子图层建出来，并处理蒙版（hasClippingMask 会裁切其后的兄弟图层）
-function buildChildren(ctx, layers, m, overrides, into) {
+async function buildChildren(ctx, layers, m, overrides, into) {
   const items = [];
   for (const child of layers || []) {
-    const shape = buildLayer(ctx, child, layerMatrix(child, m), overrides);
+    const shape = await buildLayer(ctx, child, layerMatrix(child, m), overrides);
     if (!shape) continue;
     items.push({ shape, layer: child });
   }
@@ -560,15 +562,15 @@ function makeBoard(ctx, layer, m, style, bgColor) {
   return b;
 }
 
-function buildArtboard(ctx, layer, m) {
+async function buildArtboard(ctx, layer, m) {
   const bg = layer.hasBackgroundColor ? layer.backgroundColor : { red: 1, green: 1, blue: 1, alpha: 1 };
   const b = makeBoard(ctx, layer, m, layer.style, bg);
-  buildChildren(ctx, layer.layers, m, null, b);
+  await buildChildren(ctx, layer.layers, m, null, b);
   return b;
 }
 
-function buildGroup(ctx, layer, m, style, overrides) {
-  const kids = buildChildren(ctx, layer.layers, m, overrides, null);
+async function buildGroup(ctx, layer, m, style, overrides) {
+  const kids = await buildChildren(ctx, layer.layers, m, overrides, null);
   if (!kids.length) return null;
   const g = penpot.group(kids);
   if (!g) return null;
@@ -602,7 +604,7 @@ function nestedOverrides(overrides, id) {
   return out;
 }
 
-function buildSymbolInstance(ctx, layer, m, style, over, parentOverrides) {
+async function buildSymbolInstance(ctx, layer, m, style, over, parentOverrides) {
   const symbolID = (over && over.symbolID) || layer.symbolID;
   if (over && over.symbolID === '') return null; // 覆盖为"无"
   const master = ctx.symbols.get(symbolID);
@@ -620,12 +622,12 @@ function buildSymbolInstance(ctx, layer, m, style, over, parentOverrides) {
   const sx = master.frame.width ? layer.frame.width / master.frame.width : 1;
   const sy = master.frame.height ? layer.frame.height / master.frame.height : 1;
   const inner = Math.abs(sx - 1) > EPS || Math.abs(sy - 1) > EPS ? mul(m, scale(sx, sy)) : m;
-  buildChildren(ctx, master.layers, inner, overrides, board);
+  await buildChildren(ctx, master.layers, inner, overrides, board);
   return board;
 }
 
-function buildLayer(ctx, layer, m, overrides) {
-  ctx.tick();
+async function buildLayer(ctx, layer, m, overrides) {
+  await ctx.tick();
   const over = overrides ? overrides.get(layer.do_objectID) : null;
   let style = layer.style;
   if (over && over.layerStyle && ctx.sharedStyles.has(over.layerStyle)) style = ctx.sharedStyles.get(over.layerStyle);
@@ -633,29 +635,29 @@ function buildLayer(ctx, layer, m, overrides) {
   switch (layer._class) {
     case 'artboard':
     case 'symbolMaster': {
-      const b = buildArtboard(ctx, layer, m);
+      const b = await buildArtboard(ctx, layer, m);
       if (layer._class === 'symbolMaster' && ctx.makeComponents) {
         try { penpot.library.local.createComponent([b]); } catch (e) { ctx.warn(`${layer.name}: 转为组件失败`); }
       }
       return b;
     }
     case 'group':
-      return buildGroup(ctx, layer, m, style, overrides);
+      return await buildGroup(ctx, layer, m, style, overrides);
     case 'symbolInstance':
-      return buildSymbolInstance(ctx, layer, m, style, over, overrides);
+      return await buildSymbolInstance(ctx, layer, m, style, over, overrides);
     case 'text':
       return buildText(ctx, layer, m, style, over);
     case 'bitmap':
       return buildBitmap(ctx, layer, m, style, over);
     case 'shapeGroup':
-      return buildShapeGroup(ctx, layer, m, style);
+      return await buildShapeGroup(ctx, layer, m, style);
     case 'rectangle':
     case 'oval':
     case 'shapePath':
     case 'star':
     case 'triangle':
     case 'polygon': {
-      const s = buildGeometry(ctx, layer, m);
+      const s = await buildGeometry(ctx, layer, m);
       if (!s) return null;
       applyCommon(ctx, s, layer, style);
       applyPaint(ctx, s, style);
@@ -674,6 +676,12 @@ function buildLayer(ctx, layer, m, overrides) {
 // ---------------------------------------------------------------------------
 // 入口
 // ---------------------------------------------------------------------------
+
+// Penpot 会攒下所有改动，等 3 秒没有新改动才一次性保存。一口气建几百个图层会让这个保存请求
+// 过大而失败（Failed to fetch / 自动保存失败），所以每建一批就停一下，让 Penpot 先把这批存掉。
+const BATCH_SIZE = 40;
+const BATCH_PAUSE_MS = 3500;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function countLayers(layers) {
   let n = 0;
   for (const l of layers || []) n += 1 + countLayers(l.layers);
@@ -746,9 +754,12 @@ async function importSketch({ document, pages, symbolPages, images, options }) {
   }
 
   ctx.total = pages.reduce((n, p) => n + countLayers(p.layers), 0);
-  ctx.tick = () => {
+  ctx.tick = async () => {
     ctx.done++;
-    if (ctx.done % 40 === 0) penpot.ui.sendMessage({ type: 'progress', phase: '创建图层', done: ctx.done, total: ctx.total });
+    if (ctx.done % BATCH_SIZE === 0) {
+      penpot.ui.sendMessage({ type: 'progress', phase: '创建图层（分批保存中）', done: ctx.done, total: ctx.total });
+      await sleep(BATCH_PAUSE_MS);
+    }
   };
 
   // 多个 Sketch 页面横向排开，避免重叠
@@ -760,7 +771,7 @@ async function importSketch({ document, pages, symbolPages, images, options }) {
     const pageM = translate(dx, 0);
     for (const layer of page.layers || []) {
       try {
-        const s = buildLayer(ctx, layer, layerMatrix(layer, pageM), null);
+        const s = await buildLayer(ctx, layer, layerMatrix(layer, pageM), null);
         if (s) top.push(s);
       } catch (e) {
         ctx.warn(`${layer.name}: 导入失败 (${e && e.message ? e.message : e})`);

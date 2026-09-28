@@ -92,7 +92,10 @@ const penpot = {
 };
 
 const code = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
-vm.runInNewContext(code, { penpot, console, setTimeout });
+// 分批暂停在测试里立即返回，只统计次数
+let pauses = 0;
+const fastTimeout = (fn) => { pauses++; return setTimeout(fn, 0); };
+vm.runInNewContext(code, { penpot, console, setTimeout: fastTimeout });
 
 // ---------------- 运行导入 ----------------
 const document = readJSON('document.json');
@@ -104,7 +107,7 @@ const symbolPages = pages.filter((p) => !mainPages.includes(p));
 await handler({ type: 'import', document, pages: mainPages, symbolPages, images, options: {} });
 const done = messages.find((m) => m.type === 'done' || m.type === 'error');
 if (done.type === 'error') { console.error(done.message); process.exit(1); }
-console.log('calls', calls);
+console.log('calls', calls, 'pauses', pauses);
 console.log('layers', done.layers, 'top', done.topLevel);
 console.log('missingFonts', done.missingFonts);
 console.log('warnings', done.warnings.length, done.warnings.slice(0, 30));
